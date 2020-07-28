@@ -1,0 +1,328 @@
+---
+title: "Bertke_Reactivation"
+author: "Seth Frietze"
+date: "6/21/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## HSV1 reactivation in primary mouse neurons  
+
+Herpes simplex viruses 1 and 2 (HSV-1 and HSV-2) establish latency in sensory and autonomic neurons, from which they can reactivate to cause recurrent disease such as cold, genital, and ocular sores and encephalitis.  However, some types of mature neurons support HSV replication upon entry, while other types of neurons inhibit viral replication, resulting in latency. Exogenous stimuli can trigger reactivation but only from a portion of latently infected neurons. The neuronal populations that support these divergent outcomes differ for HSV-1/HSV-2 are not known, leading to different anatomical patterns and frequencies of recurrent disease. To better understand factors that differentiate neurons in their ability to permit or prevent reactivation in response to exogenous stimuli, we performed RNA sequencing on reactivating and non-reactivating populations of adult murine neurons following neurotrophic factor deprivation.
+
+
+SMARTer® cDNA Library Construction, Illumina, STAR mm10, Gencode mV14, counts table
+```{r load data, message=FALSE}
+library(tidyverse)
+library(DESeq2)
+#read HTseq files
+countdata <- read.table("~/Documents/data/Bertke/2020/gene_read_counts_table_all_final2.tsv", header=TRUE, row.names=1)
+
+colnames(countdata) <- colnames(countdata)
+# Convert to matrix
+countdata <- as.matrix(countdata)
+head(countdata)
+# Assign condition 
+treat <- factor(c("CON","GFP","CON","GFP","CON","GFP"))
+
+# Create a coldata frame and instantiate the DESeqDataSet
+coldata <- data.frame(row.names=colnames(countdata), treat)
+
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                              colData = coldata,
+                              design= ~ treat)
+
+#filter low gene counts
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds
+
+# Run the DESeq pipeline
+dds <- DESeq(dds)
+colnames(dds) <- colnames(countdata)
+#contrast GFP over control
+res <- results(dds, contrast=c('treat','GFP','CON')) 
+dim(res)
+res <- res[complete.cases(res),]  #remove any rows with NA
+dim(res)
+result <- res[order(res$padj), ]
+head(result)
+table(result$padj<0.05)
+
+#print results with norm counts
+resdata <- merge(as.data.frame(result), as.data.frame(counts(dds, normalized=TRUE)), by="row.names", sort=FALSE)
+names(resdata)[1] <- "Gene"
+head(resdata)
+## Write results
+write.csv(resdata, file="061620_DEG_n3_reactivation.csv")
+```
+
+```{r heatmaps}
+#compare sample correlation via heatmap
+library(pheatmap)
+rld <- rlog(dds, blind=TRUE)
+rld_mat <- assay(rld)
+rld_cor <- cor(rld_mat)
+pheatmap(rld_cor)
+
+#compare sample distance vsd via heatmap
+library(RColorBrewer)
+vsd <- vst(dds, blind=FALSE)
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+```
+
+```{r tree}
+# tree relationships
+library(ape)
+d <- cor(assay(rlog(dds)), method="spearman")
+hc <- hclust(dist(1-d))
+plot.phylo(as.phylo(hc), type="p", edge.col=4, edge.width=3, show.node.label=TRUE, no.margin=TRUE)
+
+```
+
+```{r pca}
+# PCA style1
+library("PoiClaClu")
+plotPCA(vsd, intgroup = "treat")
+```
+
+```{r volcano}
+#volcano plot
+library(ggrepel)
+results = as.data.frame(dplyr::mutate(as.data.frame(result), sig=ifelse(result$padj<0.05, "FDR<0.05", "Not Sig")), row.names=rownames(result))
+head(results)
+
+DEgenes_DESeq <- results[which(abs(results$log2FoldChange) > log2(1) & results$padj < 0.05),]
+
+p <-  ggplot2::ggplot(results, ggplot2::aes(log2FoldChange, -log10(pvalue))) +
+  ggplot2::geom_point(ggplot2::aes(col = sig)) +
+  ggplot2::scale_color_manual(values = c("red", "black")) +
+  ggplot2::ggtitle("reactivation")
+
+p
+p + ggrepel::geom_text_repel(data=results[1:20, ], ggplot2::aes(label=rownames(results[1:20, ])))
+
+```
+
+```{r plotgenecounts}
+#plot counts
+Apln = plotCounts(dds, gene="Apln", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene1 <- Apln + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Apln expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+Hdac1 = plotCounts(dds, gene="Hdac1", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene2 <- Hdac1 + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Hdac1 expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+Hspa1b = plotCounts(dds, gene="Hspa1b", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene3 <- Hspa1b + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Hspa1b expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+Hspb11 = plotCounts(dds, gene="Hspb11", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene4 <- Hspb11 + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Hspb11 expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+Hsp90aa1 = plotCounts(dds, gene="Hsp90aa1", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene5 <- Hsp90aa1 + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Hsp90aa1 expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+Hspa1a = plotCounts(dds, gene="Hspa1a", intgroup = "treat", returnData = TRUE) %>%
+  ggplot() + aes(treat, count) + geom_boxplot(aes(fill=treat))  + theme_bw()
+
+gene6 <- Hspa1a + geom_jitter(shape=16, position=position_jitter(0.2)) + labs(title="Hspa1a expression") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+library(grid)
+library(ggpubr)
+plot <- ggarrange(gene1, gene2, gene3, gene4, gene5, gene6, nrow=3, ncol=3, common.legend = TRUE)
+plot
+ggsave("gene_counts_n3.pdf")
+
+```
+
+```{r biomart}
+#pathway analsyis convert to entrez gene id
+library(biomaRt)
+ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
+bm <- getBM(attributes=c("ensembl_gene_id","entrezgene_id",
+                         "mgi_symbol"),
+            filters="mgi_symbol",
+            values=resdata$Gene,
+            mart=ensembl)
+head(bm)
+#rename mgi_symbol to Gene to merge with resdata
+names(bm)[3] <- "Gene"
+#merge bm output with resdata
+merged_data <- merge(resdata, bm, by="Gene", all.x=T, sort=F)
+head(merged_data)
+
+```
+
+```{r ranks}
+#filter by significance
+#sig_genes <- merged_data[abs(merged_data$log2FoldChange)>=1 & (merged_data$padj < 0.05),]
+
+resSig <- subset(merged_data, padj < 0.1)
+head(resSig)
+dim(resSig)
+
+#make ranked tbl_df with entrezgene_id stat metric, remove na
+#summarize the mean stat across different gene ids with nas
+rank_stat <- resSig %>% 
+  dplyr::select(entrezgene_id, stat) %>% 
+  na.omit() %>% 
+  distinct() %>% 
+  group_by(entrezgene_id)%>% 
+  summarize(stat=mean(stat))
+head(rank_stat)
+dim (rank_stat)
+#make ranked tbl_df with lfc metric
+rank_lfc <- resSig %>% 
+  dplyr::select(entrezgene_id,log2FoldChange) %>% 
+  na.omit() %>% 
+  distinct() %>% 
+  group_by(entrezgene_id) %>% 
+  summarize(log2FoldChange=mean(log2FoldChange))
+head(rank_lfc)
+
+#check the results
+ResTidy <- resSig %>%
+  as_tibble() %>%
+  arrange(desc(padj))
+#view in table
+ResTidy %>% 
+  dplyr::select(Gene, entrezgene_id, padj, log2FoldChange) %>% 
+  arrange(padj) %>% 
+  DT::datatable()
+
+stat <- deframe(rank_stat)
+head(stat, 20)
+barplot(sort(stat, decreasing = T))
+
+lfc <- deframe(rank_lfc)
+head(lfc, 20)
+barplot(sort(lfc, decreasing = T))
+```
+
+```{r fgsea}
+library(fgsea)
+library(limma)
+#GSEA hallmarks gene set
+Mm.c2 <- readRDS(url("http://bioinf.wehi.edu.au/MSigDB/v7.1/Mm.c2.all.v7.1.entrez.rds"))
+Mm.c5 <- readRDS(url("http://bioinf.wehi.edu.au/MSigDB/v7.1/Mm.c5.all.v7.1.entrez.rds"))
+pathways.c2 <- Mm.c2
+pathways.c5 <- Mm.c5
+#stat metric
+fgseastat.c2 <- fgseaMultilevel(pathways.c2, stat, minSize=10, maxSize = 500)
+fgseastat.c5 <- fgseaMultilevel(pathways.c5, stat, minSize=10, maxSize = 500)
+#lfc metric
+fgsealfc.c2 <- fgseaMultilevel(pathways.c2, lfc, minSize=10, maxSize = 500)
+fgsealfc.c5 <- fgseaMultilevel(pathways.c5, lfc, minSize=10, maxSize = 500)
+#tidy the results
+
+p <-  ggplot(fgsealfc.c2, aes(x=NES, y=pathway, size=padj,color=-1*log10(padj))) + geom_point()+scale_size_area(max_size = 5)+scale_colour_gradient(low="green",high="red")
+ggplot(fgsealfc.c2, aes(x="Name of sample", y=pathway, size=padj,color=NES)) + geom_point()+scale_size_area(max_size = 5)+scale_colour_gradient(low="green",high="red")
+fgseaResTidystat.c2 <- fgseastat.c2 %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+fgseaResTidylfc.c2 <- fgsealfc.c2 %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+fgseaResTidystat.c5 <- fgseastat.c5 %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+fgseaResTidylfc.c5 <- fgsealfc.c5 %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+# Show in tables:
+fgseaResTidystat.c2 %>% 
+  dplyr::select(pathway, padj, NES) %>% 
+  arrange(padj) %>% 
+  DT::datatable()
+
+fgseaResTidylfc.c2 %>% 
+  dplyr::select(pathway, padj, NES) %>% 
+  arrange(padj) %>% 
+  DT::datatable()
+
+fgseaResTidystat.c5 %>% 
+  dplyr::select(pathway, padj, NES) %>% 
+  arrange(padj) %>% 
+  DT::datatable()
+
+fgseaResTidylfc.c5 %>% 
+  dplyr::select(pathway, padj, NES) %>% 
+  arrange(padj) %>% 
+  DT::datatable()
+
+
+plotEnrichment(pathways.c5[["GO_integral_component_of_membrane"]], stat)
+```
+
+```{r clusterprofiler}
+# CLUSTERPROFILER
+#log2 fold change of padj < 0.1 sig genes
+ResTidy
+cp_genes <- resSig %>% 
+  dplyr::select(entrezgene_id, log2FoldChange) %>% 
+  na.omit() %>% 
+  distinct() %>% 
+  group_by(entrezgene_id)
+head(cp_genes)
+
+df<- cp_genes$log2FoldChange
+
+# name the vector
+names(df) <- cp_genes$entrezgene_id
+
+# omit any NA values 
+gene_list<-na.omit(df)
+
+# sort the list in decreasing order (required for clusterProfiler)
+gene_list = sort(gene_list, decreasing = TRUE)
+organism = "org.Mm.eg.db"
+library(organism, character.only = TRUE)
+library(clusterProfiler)
+
+library(DOSE)
+data(geneList)
+de <- names(geneList)[abs(geneList) > 2]
+
+
+# library(DOSE)
+# gse <- gseGO(geneList=gene_list, 
+#              ont ="ALL", 
+#              keyType = "ENTREZID", 
+#              minGSSize = 10, 
+#              maxGSSize = 800,
+#              eps = 1e-10,
+#              pvalueCutoff = 0.05,
+#              verbose = TRUE, 
+#              OrgDb = "org.Mm.eg.db", 
+#              pAdjustMethod = "BH")
+# 
+# require(DOSE)
+# dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+```
+
